@@ -175,6 +175,7 @@ def get_logs(
     if follow:
         cmd.append("-f")
 
+    process = None
     try:
         process = subprocess.Popen(
             cmd,
@@ -201,12 +202,27 @@ def get_logs(
                 except Exception as e:
                     logger.warning("log store failed for %s: %s", service_name, e)
 
-        process.stdout.close()
-        process.wait()
-
     except Exception as e:
         logger.error("Failed to stream logs for %s: %s", container_name, e)
         yield f"Error: {e}"
+    finally:
+        if process is not None:
+            try:
+                if process.stdout is not None:
+                    process.stdout.close()
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=1)
+                    except Exception:
+                        if process.poll() is None:
+                            process.kill()
+                            process.wait()
+            except Exception as e:
+                logger.warning(
+                    "Error cleaning up log process for %s: %s", container_name, e
+                )
+
 
 
 def normalize_services(services):
