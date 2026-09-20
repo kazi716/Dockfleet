@@ -629,4 +629,27 @@ def test_get_logs_popen_exception_handled_gracefully(mock_popen):
     assert "Error: docker executable not found" in lines[0]
 
 
+@patch("dockfleet.core.orchestrator.subprocess.Popen")
+def test_get_logs_stdout_close_exception_does_not_prevent_process_termination(mock_popen):
+    """Test that an exception during process.stdout.close() does not skip process termination."""
+    from dockfleet.core.orchestrator import get_logs
+
+    mock_proc = MagicMock()
+    mock_proc.stdout.readline.side_effect = ["line 1\n", "line 2\n"]
+    mock_proc.stdout.close.side_effect = OSError("stdout close error")
+    mock_proc.poll.return_value = None  # process still running
+    mock_popen.return_value = mock_proc
+
+    gen = get_logs("web", follow=True)
+    first_line = next(gen)
+    assert first_line == "line 1"
+
+    # Close the generator prematurely (simulating client disconnect)
+    gen.close()
+
+    mock_proc.stdout.close.assert_called_once()
+    mock_proc.terminate.assert_called_once()
+
+
+
 

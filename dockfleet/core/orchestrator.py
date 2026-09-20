@@ -207,9 +207,13 @@ def get_logs(
         yield f"Error: {e}"
     finally:
         if process is not None:
-            try:
-                if process.stdout is not None:
+            if process.stdout is not None:
+                try:
                     process.stdout.close()
+                except Exception as e:
+                    logger.warning("Error closing stdout for %s: %s", container_name, e)
+
+            try:
                 if process.poll() is None:
                     process.terminate()
                     try:
