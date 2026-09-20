@@ -1,9 +1,6 @@
 import os
 import subprocess
 import sys
-from pathlib import Path
-
-import pytest
 from sqlalchemy.engine import Engine
 from sqlmodel import select
 
@@ -24,6 +21,11 @@ def test_import_models_has_no_disk_side_effects(tmp_path):
     Verify that importing dockfleet.health.models in a clean Python process
     does not create dockfleet.db or open a database connection.
     """
+    root_db = PROJECT_ROOT / "dockfleet.db"
+    existed_before = root_db.exists()
+    initial_content = root_db.read_bytes() if existed_before else None
+    initial_mtime = root_db.stat().st_mtime_ns if existed_before else None
+
     code = """
 import os
 import sys
@@ -37,9 +39,8 @@ if cwd_db.exists():
 # Pure import of models module
 import dockfleet.health.models as models
 
-# Check if dockfleet.db was created on disk
+# Check if dockfleet.db was created on disk in cwd
 assert not cwd_db.exists(), "dockfleet.db was created on module import!"
-assert not (models.PROJECT_ROOT / "dockfleet.db").exists(), "dockfleet.db was created on module import!"
 
 # Inspecting classes must also not trigger engine creation
 _ = models.Service
@@ -52,14 +53,29 @@ _ = models.LogEvent
 assert len(models._engines) == 0, f"Expected 0 cached engines, got {len(models._engines)}"
 print("IMPORT_CLEAN_SUCCESS")
 """
+    env = os.environ.copy()
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        f"{PROJECT_ROOT}{os.pathsep}{existing_pythonpath}"
+        if existing_pythonpath
+        else str(PROJECT_ROOT)
+    )
     result = subprocess.run(
         [sys.executable, "-c", code],
         cwd=str(tmp_path),
         capture_output=True,
         text=True,
+        env=env,
     )
     assert result.returncode == 0, f"Subprocess failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
     assert "IMPORT_CLEAN_SUCCESS" in result.stdout
+
+    if not existed_before:
+        assert not root_db.exists(), "dockfleet.db was created on module import!"
+    else:
+        assert root_db.exists(), "dockfleet.db was deleted on module import!"
+        assert root_db.stat().st_mtime_ns == initial_mtime, "dockfleet.db was mutated on module import!"
+        assert root_db.read_bytes() == initial_content, "dockfleet.db content changed on module import!"
 
 
 def test_precedence_explicit_parameter_overrides_env_and_default(monkeypatch):
@@ -172,6 +188,10 @@ def test_isolated_test_suite_does_not_touch_root_db():
     never create or pollute root dockfleet.db.
     """
     root_db = PROJECT_ROOT / "dockfleet.db"
+    existed_before = root_db.exists()
+    initial_content = root_db.read_bytes() if existed_before else None
+    initial_mtime = root_db.stat().st_mtime_ns if existed_before else None
+
     # Ensure tables are initialized via isolated fixture
     init_db()
     with get_session() as session:
@@ -179,7 +199,28 @@ def test_isolated_test_suite_does_not_touch_root_db():
         session.commit()
 
     # Root dockfleet.db must NOT be created or modified
-    assert not root_db.exists(), f"Root database {root_db} was mutated by tests!"
+    if not existed_before:
+        assert not root_db.exists(), f"Root database {root_db} was mutated by tests!"
+    else:
+        assert root_db.exists(), f"Root database {root_db} was deleted by tests!"
+        assert root_db.stat().st_mtime_ns == initial_mtime, f"Root database {root_db} mtime was mutated by tests!"
+        assert root_db.read_bytes() == initial_content, f"Root database {root_db} content was mutated by tests!"
+
+        # Explicitly verify the isolated record was NOT written to root_db
+        import sqlite3
+
+        try:
+            conn = sqlite3.connect(root_db)
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='service'")
+                if cursor.fetchone():
+                    cursor.execute("SELECT count(*) FROM service WHERE name = 'isolation-check'")
+                    assert cursor.fetchone()[0] == 0, f"Record was written to root database {root_db}!"
+            finally:
+                conn.close()
+        except sqlite3.DatabaseError:
+            pass
 
 
 def test_in_memory_sqlite_static_pool_shares_state():
