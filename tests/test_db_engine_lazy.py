@@ -1,9 +1,6 @@
 import os
 import subprocess
 import sys
-from pathlib import Path
-
-import pytest
 from sqlalchemy.engine import Engine
 from sqlmodel import select
 
@@ -52,11 +49,19 @@ _ = models.LogEvent
 assert len(models._engines) == 0, f"Expected 0 cached engines, got {len(models._engines)}"
 print("IMPORT_CLEAN_SUCCESS")
 """
+    env = os.environ.copy()
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        f"{PROJECT_ROOT}{os.pathsep}{existing_pythonpath}"
+        if existing_pythonpath
+        else str(PROJECT_ROOT)
+    )
     result = subprocess.run(
         [sys.executable, "-c", code],
         cwd=str(tmp_path),
         capture_output=True,
         text=True,
+        env=env,
     )
     assert result.returncode == 0, f"Subprocess failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
     assert "IMPORT_CLEAN_SUCCESS" in result.stdout
