@@ -49,3 +49,19 @@ def test_stop_endpoint():
     response = asyncio.run(_run())
     # allow both success and safe failure
     assert response.status_code in [200, 400, 404]
+
+
+def test_dashboard_home_renders_html_from_any_cwd(tmp_path, monkeypatch):
+    """Verify that the dashboard home page renders HTML even when cwd is changed."""
+    monkeypatch.chdir(tmp_path)
+
+    async def _run():
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            return await client.get("/")
+
+    response = asyncio.run(_run())
+    assert response.status_code == 200
+    assert "text/html" in response.headers.get("content-type", "")
+    assert "<!DOCTYPE html>" in response.text or "<html" in response.text

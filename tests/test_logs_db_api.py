@@ -88,7 +88,7 @@ def test_ingest_docker_logs_once_initial_and_incremental(monkeypatch):
         # 1. Initial ingest (no prior logs) -> should use --tail
         ingest_docker_logs_once(tail=200)
 
-        with Session(engine) as session:
+        with get_session() as session:
             rows = session.exec(
                 select(LogEvent).where(LogEvent.service_name == "api")
             ).all()
@@ -103,7 +103,7 @@ def test_ingest_docker_logs_once_initial_and_incremental(monkeypatch):
         # 2. Subsequent ingest -> should use --since with latest_ts isoformat
         ingest_docker_logs_once(tail=200)
 
-        with Session(engine) as session:
+        with get_session() as session:
             rows = session.exec(
                 select(LogEvent)
                 .where(LogEvent.service_name == "api")
