@@ -88,8 +88,10 @@ def test_ingest_docker_logs_once_initial_and_incremental(monkeypatch):
         # 1. Initial ingest (no prior logs) -> should use --tail
         ingest_docker_logs_once(tail=200)
 
-        with get_session() as session:
-            rows = session.exec(select(LogEvent).where(LogEvent.service_name == "api")).all()
+        with Session(engine) as session:
+            rows = session.exec(
+                select(LogEvent).where(LogEvent.service_name == "api")
+            ).all()
             assert len(rows) == 2
             messages = [r.message for r in rows]
             assert messages == ["line 1", "line 2"]
@@ -101,8 +103,12 @@ def test_ingest_docker_logs_once_initial_and_incremental(monkeypatch):
         # 2. Subsequent ingest -> should use --since with latest_ts isoformat
         ingest_docker_logs_once(tail=200)
 
-        with get_session() as session:
-            rows = session.exec(select(LogEvent).where(LogEvent.service_name == "api").order_by(LogEvent.created_at)).all()
+        with Session(engine) as session:
+            rows = session.exec(
+                select(LogEvent)
+                .where(LogEvent.service_name == "api")
+                .order_by(LogEvent.created_at)
+            ).all()
             assert len(rows) == 3
             messages = [r.message for r in rows]
             assert messages == ["line 1", "line 2", "line 3"]
@@ -111,4 +117,3 @@ def test_ingest_docker_logs_once_initial_and_incremental(monkeypatch):
         assert recorded_cmds[1][:2] == ["docker", "logs"]
         assert recorded_cmds[1][2] == "--since"
         assert recorded_cmds[1][-1] == "dockfleet_api"
-

@@ -8,4 +8,4 @@ pytest
 pytest-asyncio
 typer
 requests
-httpx
+httpx>=0.27.0
