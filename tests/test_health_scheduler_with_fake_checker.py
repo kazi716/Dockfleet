@@ -167,3 +167,44 @@ def test_scheduler_skips_stopped_service():
             assert s.status == ContainerStatus.STOPPED
             assert s.consecutive_failures == 0
 
+
+def test_scheduler_run_single_pass():
+    init_db()
+
+    config_path = "examples/dockfleet.yaml"
+    config: DockFleetConfig = load_config(config_path)
+
+    with get_session() as session:
+        seed_services(config, session)
+        svc = session.exec(select(Service).where(Service.name == "api")).one()
+        svc.status = ContainerStatus.RUNNING
+        session.add(svc)
+        session.commit()
+
+    original_hc = config.services["api"].healthcheck
+    assert original_hc is not None
+    hc = HealthCheckConfig(
+        type="process",
+        endpoint=original_hc.endpoint,
+        interval=original_hc.interval,
+    )
+    config.services["api"].healthcheck = hc
+
+    fake_checker = FakeChecker(script={"api": [True]})
+    scheduler = HealthScheduler(
+        config=config,
+        checker=fake_checker,
+    )
+
+    results = scheduler.run_single_pass()
+    assert "api" in results
+    assert results["api"] is True
+
+    with get_session() as session:
+        svc = session.exec(select(Service).where(Service.name == "api")).one()
+        assert svc.status == ContainerStatus.RUNNING
+        assert svc.health_status == HealthStatus.HEALTHY
+        assert svc.consecutive_failures == 0
+
+
+

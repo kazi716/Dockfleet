@@ -129,3 +129,21 @@ def test_cli_down_stops_scheduler(mock_down, mock_stop_scheduler):
     mock_down.assert_called_once()
     mock_stop_scheduler.assert_called_once()
 
+
+@patch("dockfleet.cli.main.HealthScheduler")
+@patch("dockfleet.cli.main.bootstrap_from_path")
+def test_cli_health_dev_once(mock_bootstrap, mock_scheduler_cls):
+    """Test that dockfleet health-dev --once runs a single pass via scheduler.run_single_pass."""
+    mock_scheduler = mock_scheduler_cls.return_value
+    mock_scheduler.run_single_pass.return_value = {"api": True}
+
+    result = runner.invoke(app, ["health-dev", "examples/dockfleet.yaml", "--once"])
+    assert result.exit_code == 0
+    assert "Starting DockFleet health check scheduler (DEV MODE)" in result.stdout
+    assert "Running a single health pass" in result.stdout
+    assert "api: healthy" in result.stdout
+    assert "Single health pass complete." in result.stdout
+    mock_scheduler.run_single_pass.assert_called_once()
+    mock_scheduler.start.assert_not_called()
+
+
