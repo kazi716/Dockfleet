@@ -1,14 +1,16 @@
+from __future__ import annotations
+
+import concurrent.futures
 import logging
 import threading
 import time
 from pathlib import Path
-from typing import Optional
-from sqlmodel import Session, select
+from sqlmodel import select
 
 from dockfleet.cli.config import DockFleetConfig, HealthCheckConfig
 from dockfleet.core.orchestrator import mark_restart_failed, restart_service
 from dockfleet.health.checker import HealthChecker
-from dockfleet.health.models import Service, engine
+from dockfleet.health.models import ContainerStatus, Service, get_session
 from dockfleet.health.scheduler_lock import SchedulerLock
 from dockfleet.health.status import (
     mark_restart_successful,
@@ -56,7 +58,7 @@ class HealthScheduler:
         # locking; ``None`` disables it (e.g. in tests that manage the
         # scheduler manually or in single-pass ``--once`` mode).
         if project_dir is not None:
-            self._lock: Optional[SchedulerLock] = SchedulerLock(Path(project_dir))
+            self._lock: SchedulerLock | None = SchedulerLock(Path(project_dir))
         else:
             self._lock = None
 
@@ -126,20 +128,16 @@ class HealthScheduler:
         if self._lock is not None and self._lock.is_held:
             self._lock.release()
 
-    def _poll(self) -> None:
+    def run_single_pass(self) -> dict[str, bool]:
         """
-        Main loop to run health checks in the background.
-
-        Uses in-memory DockFleetConfig to know which services to check,
-        and writes results into the Service table via update_service_health.
-        After each update, evaluates auto-restart rules and, when needed,
-        asks the orchestrator to restart the container.
+        Execute a single health check pass across all configured services,
+        integrating with the health engine's unified state pipeline.
+        Returns a dictionary mapping service_name to boolean health status.
         """
-        self._logger.info("HealthScheduler: poll loop started")
-
-        while not self._stopped:
-            self._logger.info("HealthScheduler: polling services...")
-
+        results: dict[str, bool] = {}
+        futures = {}
+        # Run all health checks concurrently
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             for name, svc_cfg in self.config.services.items():
                 hc: HealthCheckConfig | None = svc_cfg.healthcheck
 
@@ -147,8 +145,32 @@ class HealthScheduler:
                 if hc is None:
                     continue
 
+                # Check if the service is currently marked as STOPPED in the database
+                with get_session() as session:
+                    svc_db = session.exec(
+                        select(Service).where(Service.name == name)
+                    ).one_or_none()
+
+                if svc_db is not None and svc_db.status in (
+                    ContainerStatus.STOPPED,
+                    ContainerStatus.STOPPED.value,
+                ):
+                    self._logger.debug(
+                        "HealthScheduler: %s is STOPPED, skipping health check",
+                        name,
+                    )
+                    continue
+
+                # Submit the check to the thread pool
+                future = executor.submit(self._run_single_check, name, hc)
+                futures[future] = name
+
+            # Process results sequentially to avoid SQLite locking issues
+            for future in concurrent.futures.as_completed(futures):
+                name = futures[future]
                 try:
-                    ok = self._run_single_check(name, hc)
+                    ok = future.result()
+                    results[name] = ok
                     status_str = "HEALTHY" if ok else "UNHEALTHY"
                     self._logger.info("HealthScheduler: %s -> %s", name, status_str)
 
@@ -164,7 +186,7 @@ class HealthScheduler:
 
                     # after DB update, decide & trigger restart if needed
                     self._handle_post_health(name)
-                except Exception as exc:  # pragma: no cover (defensive)
+                except Exception as exc:  # noqa: BLE001 # pragma: no cover (defensive)
                     # Defensive guard: one bad service should not kill scheduler
                     self._logger.error(
                         "HealthScheduler: error while polling %s: %s",
@@ -172,6 +194,22 @@ class HealthScheduler:
                         exc,
                     )
 
+        return results
+
+    def _poll(self) -> None:
+        """
+        Main loop to run health checks in the background.
+
+        Uses in-memory DockFleetConfig to know which services to check,
+        and writes results into the Service table via update_service_health.
+        After each update, evaluates auto-restart rules and, when needed,
+        asks the orchestrator to restart the container.
+        """
+        self._logger.info("HealthScheduler: poll loop started")
+
+        while not self._stopped:
+            self._logger.info("HealthScheduler: polling services...")
+            self.run_single_pass()
             time.sleep(self.interval_seconds)
 
         self._logger.info("HealthScheduler: poll loop exiting")
@@ -209,7 +247,7 @@ class HealthScheduler:
             return
 
         # Load latest DB state
-        with Session(engine) as session:
+        with get_session() as session:
             svc = session.exec(
                 select(Service).where(Service.name == name)
             ).one_or_none()
@@ -312,7 +350,7 @@ class HealthScheduler:
             # On success: reset streak, mark running+healthy, and record event.
             mark_restart_successful(svc.name)
             record_restart_event(svc, "3_failed_health_checks")
-        except Exception as exc:  # pragma: no cover (defensive)
+        except Exception as exc:  # noqa: BLE001 # pragma: no cover (defensive)
             # Restart failed: mark as crashed with a readable reason.
             self._logger.error(
                 "HealthScheduler: auto-restart failed for %s: %s",
@@ -329,11 +367,21 @@ class HealthScheduler:
         # Run one health check based on its type and return True/False.
         hc_type = hc.type.lower()
 
+        if hc_type in {"http", "tcp"} and hc.endpoint is None:
+            self._logger.warning(
+                "HealthScheduler: missing %s endpoint for %s",
+                hc_type,
+                name,
+            )
+            return False
+
         if hc_type == "http":
+            assert hc.endpoint is not None
             # Expect endpoint like "http://localhost:8000/health"
             return self._checker.check_http(hc.endpoint)
 
         if hc_type == "tcp":
+            assert hc.endpoint is not None
             # Expect endpoint like "localhost:8000"
             host, port = self._split_host_port(hc.endpoint)
             if host is None or port is None:

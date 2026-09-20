@@ -1,10 +1,12 @@
+from __future__ import annotations
+
+import logging
 from collections.abc import Iterable
 from datetime import datetime, timezone
-import logging
 
-from sqlmodel import Session, func, select
+from sqlmodel import func, select
 
-from .models import LogEvent, Service, engine
+from .models import LogEvent, Service, get_engine, get_session
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,8 @@ def _format_created_at(value: datetime | str | None) -> str:
     return str(value)
 
 
+_SERVICE_ID_CACHE: dict[str, dict[str, int]] = {}
+
 def store_log_line(
     service_name: str,
     message: str,
@@ -43,21 +47,31 @@ def store_log_line(
     Store a single log metadata row for later search/analytics.
 
     - Looks up Service by name and attaches service_id + service_name.
+    - Uses an in-memory cache to avoid O(N) SELECT queries during log ingestion.
     - Skips insert (with a warning) if the service is not present in the DB.
     - Persists created_at as a timezone-aware datetime instance (UTC).
     """
-    with Session(engine) as session:
-        svc = session.exec(
-            select(Service).where(Service.name == service_name)
-        ).one_or_none()
+    db_url = str(get_engine().url)
+    cache = _SERVICE_ID_CACHE.setdefault(db_url, {})
 
-        if svc is None:
-            print(f"[logs] Service '{service_name}' not found in DB, skipping log")
-            return
+    if service_name not in cache:
+        with get_session() as session:
+            svc = session.exec(
+                select(Service).where(Service.name == service_name)
+            ).one_or_none()
+            if svc is not None:
+                assert svc.id is not None
+                cache[service_name] = svc.id
 
+    service_id = cache.get(service_name)
+    if service_id is None:
+        print(f"[logs] Service '{service_name}' not found in DB, skipping log")
+        return
+
+    with get_session() as session:
         event = LogEvent(
-            service_id=svc.id,
-            service_name=svc.name,
+            service_id=service_id,
+            service_name=service_name,
             created_at=datetime.now(timezone.utc),
             level=level,
             message=message,
@@ -85,7 +99,7 @@ def query_logs(
     # hard cap for safety
     limit = min(limit, 1000)
 
-    with Session(engine) as session:
+    with get_session() as session:
         stmt = select(LogEvent)
 
         if service_name:
@@ -94,9 +108,9 @@ def query_logs(
         if q:
             pattern = f"%{q}%"
             # SQLite: LIKE (case-sensitive by default); can be tuned later.
-            stmt = stmt.where(LogEvent.message.like(pattern))
+            stmt = stmt.where(LogEvent.message.like(pattern))  # type: ignore
 
-        stmt = stmt.order_by(LogEvent.created_at.desc()).offset(offset).limit(limit)
+        stmt = stmt.order_by(LogEvent.created_at.desc()).offset(offset).limit(limit)  # type: ignore
         events = session.exec(stmt).all()
 
     return list(events)

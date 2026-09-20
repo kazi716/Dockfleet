@@ -1,0 +1,63 @@
+name: Feature Request
+description: Suggest an idea or new feature for DockFleet
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for suggesting a feature for DockFleet! Please provide as much detail as possible to help us evaluate and design this feature.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement / Motivation
+      description: Is your feature request related to a problem or limitation? A clear and concise description of the challenge you are facing.
+      placeholder: "I'm always frustrated when..."
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed Solution
+      description: A clear and concise description of what you want to happen, including any proposed CLI commands or Dashboard/API changes.
+      placeholder: Describe the desired behavior or solution...
+    validations:
+      required: true
+  - type: textarea
+    id: example-yaml
+    attributes:
+      label: Example YAML Configuration or CLI Syntax (if applicable)
+      description: Provide an example of how this feature would look in `dockfleet.yaml` or in the CLI.
+      render: yaml
+      placeholder: |
+        services:
+          app:
+            restart_policy:
+              condition: on-failure
+              max_retries: 5
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: A clear and concise description of any alternative solutions or features you've considered.
+      placeholder: Describe alternatives you've thought about...
+    validations:
+      required: false
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      description: Add any other context, mockups, or screenshots about the feature request here.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission Checklist
+      options:
+        - label: I have searched existing issues and discussions to ensure this feature has not already been proposed.
+          required: true
+        - label: This feature aligns with DockFleet's core goal of being a lightweight, local-first container orchestrator.
+          required: true

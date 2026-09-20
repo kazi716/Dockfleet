@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: GitHub Discussions
+    url: https://github.com/Aditya8369/Dockfleet/discussions
+    about: Ask general questions, share ideas, and discuss DockFleet with the community.
+  - name: Security Vulnerabilities
+    url: https://github.com/Aditya8369/Dockfleet/security/advisories
+    about: Please report security vulnerabilities privately according to our security policy.
+  - name: Documentation & User Guide
+    url: https://github.com/Aditya8369/Dockfleet/blob/main/USER_GUIDE.md
+    about: Check the User Guide and architecture documentation for questions before opening an issue.

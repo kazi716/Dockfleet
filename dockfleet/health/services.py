@@ -97,7 +97,12 @@ def services_from_config(config: DockFleetConfig) -> list[Service]:
 
 def seed_services(config: DockFleetConfig, session: Session) -> None:
     """
-    Seed services from config into the database session if not already existing.
+    Seed services from config into the database session.
+
+    If a service already exists, updates its configuration fields
+    (image, restart_policy, ports, healthcheck, resources, env, depends_on)
+    while preserving its runtime state (status, health_status, restart_count, etc.).
+    If it does not exist, adds a new Service row.
     """
     services = services_from_config(config)
 
@@ -108,10 +113,19 @@ def seed_services(config: DockFleetConfig, session: Session) -> None:
         ).one_or_none()
 
         if existing is not None:
-            # Already present -> skip
-            continue
-
-        # Not present -> add new row
-        session.add(svc)
+            # Update configuration fields from incoming svc
+            existing.image = svc.image
+            existing.restart_policy = svc.restart_policy
+            existing.ports_raw = svc.ports_raw
+            existing.healthcheck_raw = svc.healthcheck_raw
+            existing.resources_memory = svc.resources_memory
+            existing.resources_cpu = svc.resources_cpu
+            existing.env_raw = svc.env_raw
+            existing.depends_on_raw = svc.depends_on_raw
+            session.add(existing)
+        else:
+            # Not present -> add new row
+            session.add(svc)
 
     session.commit()
+

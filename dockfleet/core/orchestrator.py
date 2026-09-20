@@ -6,7 +6,7 @@ import threading
 import time
 
 from pydantic import BaseModel
-from sqlmodel import Session, select
+from sqlmodel import select
 
 from dockfleet.cli.config import DockFleetConfig, RestartPolicy
 from dockfleet.core.docker import DockerManager
@@ -16,7 +16,12 @@ from dockfleet.core.docker_flags import (
     build_resource_flags,
 )
 from dockfleet.health.logs import store_log_line
-from dockfleet.health.models import ContainerStatus, HealthStatus, Service, engine
+from dockfleet.health.models import (
+    ContainerStatus,
+    HealthStatus,
+    Service,
+    get_session,
+)
 from dockfleet.health.seed import bootstrap_from_config
 from dockfleet.health.status import (
     mark_restart_successful,
@@ -326,7 +331,7 @@ class Orchestrator:
     def _mark_restart_failed(self, service_name: str, reason: str) -> None:
         """Mark a service restart attempt as failed in DB, setting status=STOPPED and health_status=CRASHED."""
         try:
-            with Session(engine) as session:
+            with get_session() as session:
                 db_svc = session.exec(
                     select(Service).where(Service.name == service_name)
                 ).one_or_none()
@@ -391,7 +396,7 @@ class Orchestrator:
 
         try:
             # Set DB health_status to RESTARTING during restart execution
-            with Session(engine) as session:
+            with get_session() as session:
                 db_svc = session.exec(
                     select(Service).where(Service.name == service_name)
                 ).one_or_none()
@@ -445,7 +450,7 @@ class Orchestrator:
                 return False
         except Exception as e:
             try:
-                with Session(engine) as session:
+                with get_session() as session:
                     db_svc = session.exec(
                         select(Service).where(Service.name == service_name)
                     ).one_or_none()
@@ -463,7 +468,7 @@ class Orchestrator:
     def _increment_restart_count(self, service_name: str) -> None:
         """Increment the cumulative restart count for a service in the database."""
         try:
-            with Session(engine) as session:
+            with get_session() as session:
                 svc = session.exec(
                     select(Service).where(Service.name == service_name)
                 ).one_or_none()
@@ -494,7 +499,14 @@ class Orchestrator:
             )
 
             for line in result.stdout.splitlines():
-                name, status = line.split("\t")
+                if not line.strip():
+                    continue
+
+                parts = line.split("\t")
+                if len(parts) < 2:
+                    continue
+
+                name, status = parts[0], parts[1]
 
                 if not name.startswith("dockfleet_"):
                     continue
@@ -544,7 +556,7 @@ class Orchestrator:
         logger.info("%s auto-restarted", service_name)
         mark_restart_successful(service_name)
 
-        with Session(engine) as session:
+        with get_session() as session:
             svc = session.exec(
                 select(Service).where(Service.name == service_name)
             ).one_or_none()
@@ -732,12 +744,14 @@ class Orchestrator:
                     service_name = container.replace("dockfleet_", "")
 
                     cpu_str, mem_usage, mem_perc = parts[1:4]
-                    cpu = (
-                        float(re.sub(r"[^\d.]", "", cpu_str))
-                        if cpu_str != "0.00%"
-                        else 0.0
+                    cleaned_cpu = re.sub(r"[^\d.]", "", cpu_str)
+                    cpu = float(cleaned_cpu) if cleaned_cpu else 0.0
+                    mem_parts = (
+                        [p.strip() for p in mem_usage.split("/")]
+                        if "/" in mem_usage
+                        else [mem_usage.strip(), "N/A"]
                     )
-                    mem_current, mem_limit = mem_usage.split("/")
+                    mem_current, mem_limit = mem_parts[0], mem_parts[1]
                     uptime = self._get_container_uptime(container)
 
                     stats.append(

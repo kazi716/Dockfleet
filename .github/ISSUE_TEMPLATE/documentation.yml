@@ -1,0 +1,56 @@
+name: Documentation Improvement
+description: Suggest improvements, report typos, or request additions to DockFleet documentation
+title: "[Docs]: "
+labels: ["documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve DockFleet's documentation!
+  - type: dropdown
+    id: area
+    attributes:
+      label: Documentation Area
+      description: Which area of the documentation needs improvement?
+      options:
+        - README.md (Overview & Quickstart)
+        - USER_GUIDE.md (Usage & Commands)
+        - ARCHITECTURE.md (Design & Internals)
+        - CONTRIBUTING.md (Development Workflow)
+        - SECURITY.md (Security Policy)
+        - CLI Help / docstrings
+        - Dashboard & API Documentation
+        - Other (specify below)
+    validations:
+      required: true
+  - type: input
+    id: doc-location
+    attributes:
+      label: Location / Link to Existing Documentation
+      description: Provide the file path or link to the section that needs improvement (if applicable).
+      placeholder: "e.g. USER_GUIDE.md#health-checks or https://..."
+    validations:
+      required: false
+  - type: textarea
+    id: description
+    attributes:
+      label: Description of Issue / Missing Information
+      description: What is inaccurate, outdated, confusing, or missing?
+      placeholder: Explain what needs to be improved...
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-changes
+    attributes:
+      label: Proposed Changes / Content
+      description: What changes or additions would you suggest? (Markdown snippets are welcome!)
+      placeholder: Provide the suggested documentation text or corrections...
+    validations:
+      required: false
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Contribution
+      options:
+        - label: I would like to submit a Pull Request to fix or improve this documentation.
+          required: false

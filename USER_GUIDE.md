@@ -136,10 +136,42 @@ Displays the installed DockFleet version.
 ##### Validate configuration
 
 ```
-dockfleet validate examples/dockfleet.yaml
+dockfleet validate [PATH_TO_YAML]
 ```
 
-Checks whether the YAML configuration is valid.
+This acts as a **dry-run/pre-flight safety check** to ensure your configuration is fully valid *before* attempting to start any services. If no path is supplied, it defaults to `examples/dockfleet.yaml`.
+
+The validation process:
+- Checks the YAML structure and schema.
+- Enforces configuration constraints (e.g., valid memory formats, positive CPU limits, proper port formats, and verifying `depends_on` references).
+- **Does NOT** start services or modify Docker containers.
+
+**Exit Codes:**
+- **`0`**: Configuration is valid. You will see a `✓ Config valid` success message.
+- **`1`**: Validation failed. You will see a detailed error pointing out the exact field and issue.
+
+**Minimal valid configuration example:**
+```yaml
+services:
+  web:
+    image: nginx:latest
+    restart: always
+```
+
+**Invalid configuration example:**
+```yaml
+services:
+  web:
+    image: nginx:latest
+    restart: always
+    resources:
+      memory: "500mb"  # Invalid format
+```
+This fails validation because `memory` must end in `m` or `g`. Running `dockfleet validate` on this returns:
+```text
+Configuration Validation Error in 'dockfleet.yaml':
+ - services -> web -> resources -> memory: Value error, invalid memory limit (expected like 512m or 1g)
+```
 
 ---
 
@@ -316,7 +348,13 @@ Fix:
 
 ## 8. Quick Workflow
 
-```
+It is highly recommended to validate your configuration before starting the stack:
+1. Create or edit your `dockfleet.yaml`
+2. Run `dockfleet validate` to check for errors
+3. Fix any validation errors and validate again
+4. Only then start the stack
+
+```bash
 dockfleet validate examples/dockfleet.yaml
 dockfleet doctor
 dockfleet seed examples/dockfleet.yaml

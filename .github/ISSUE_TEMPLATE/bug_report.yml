@@ -1,0 +1,92 @@
+name: Bug Report
+description: Create a report to help us fix a bug in DockFleet
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill out the form below to help us reproduce and fix the issue.
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is.
+      placeholder: Describe what happened and why it is unexpected.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Step-by-step instructions to reproduce the behavior.
+      placeholder: |
+        1. Create a dockfleet.yaml with ...
+        2. Run 'dockfleet up examples/dockfleet.yaml'
+        3. Observe error ...
+    validations:
+      required: true
+  - type: textarea
+    id: dockfleet-yaml
+    attributes:
+      label: Minimal dockfleet.yaml
+      description: Provide a minimal reproducing dockfleet.yaml configuration snippet (remove any sensitive credentials).
+      render: yaml
+      placeholder: |
+        version: "1.0"
+        services:
+          web:
+            image: nginx:alpine
+            ports:
+              - "8080:80"
+    validations:
+      required: false
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+      placeholder: Service should have automatically restarted after 3 failed health checks...
+    validations:
+      required: true
+  - type: textarea
+    id: actual-behavior
+    attributes:
+      label: Actual Behavior
+      description: What actually happened?
+      placeholder: Container remained in dead state without triggering restart...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment Info
+      description: |
+        Provide environment details. You can run `dockfleet doctor` or inspect your system.
+      value: |
+        - DockFleet Version:
+        - Python Version:
+        - Docker Version:
+        - OS & Architecture (e.g. Ubuntu 22.04 x86_64, macOS Apple Silicon, Windows 11):
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and Error Output
+      description: Include relevant terminal output, `dockfleet doctor` output, `dockfleet-health.log`, or container logs.
+      render: shell
+      placeholder: Paste command output and logs here...
+    validations:
+      required: false
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission Checklist
+      options:
+        - label: I have searched existing issues to ensure this is not a duplicate.
+          required: true
+        - label: I ran `dockfleet doctor` to verify Docker daemon and environment health.
+          required: false
+        - label: I have removed all sensitive information (passwords, tokens, API keys) from logs and YAML configurations.
+          required: true
