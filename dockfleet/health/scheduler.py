@@ -128,6 +128,74 @@ class HealthScheduler:
         if self._lock is not None and self._lock.is_held:
             self._lock.release()
 
+    def run_single_pass(self) -> dict[str, bool]:
+        """
+        Execute a single health check pass across all configured services,
+        integrating with the health engine's unified state pipeline.
+        Returns a dictionary mapping service_name to boolean health status.
+        """
+        results: dict[str, bool] = {}
+        futures = {}
+        # Run all health checks concurrently
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            for name, svc_cfg in self.config.services.items():
+                hc: HealthCheckConfig | None = svc_cfg.healthcheck
+
+                # Skip services without healthcheck
+                if hc is None:
+                    continue
+
+                # Check if the service is currently marked as STOPPED in the database
+                with get_session() as session:
+                    svc_db = session.exec(
+                        select(Service).where(Service.name == name)
+                    ).one_or_none()
+
+                if svc_db is not None and svc_db.status in (
+                    ContainerStatus.STOPPED,
+                    ContainerStatus.STOPPED.value,
+                ):
+                    self._logger.debug(
+                        "HealthScheduler: %s is STOPPED, skipping health check",
+                        name,
+                    )
+                    continue
+
+                # Submit the check to the thread pool
+                future = executor.submit(self._run_single_check, name, hc)
+                futures[future] = name
+
+            # Process results sequentially to avoid SQLite locking issues
+            for future in concurrent.futures.as_completed(futures):
+                name = futures[future]
+                try:
+                    ok = future.result()
+                    results[name] = ok
+                    status_str = "HEALTHY" if ok else "UNHEALTHY"
+                    self._logger.info("HealthScheduler: %s -> %s", name, status_str)
+
+                    if ok:
+                        self._restart_attempts.pop(name, None)
+                        self._next_restart_at.pop(name, None)
+
+                    update_service_health(
+                        name,
+                        ok,
+                        reason=None if ok else "health check failed",
+                    )
+
+                    # after DB update, decide & trigger restart if needed
+                    self._handle_post_health(name)
+                except Exception as exc:  # noqa: BLE001 # pragma: no cover (defensive)
+                    # Defensive guard: one bad service should not kill scheduler
+                    self._logger.error(
+                        "HealthScheduler: error while polling %s: %s",
+                        name,
+                        exc,
+                    )
+
+        return results
+
     def _poll(self) -> None:
         """
         Main loop to run health checks in the background.
@@ -141,66 +209,7 @@ class HealthScheduler:
 
         while not self._stopped:
             self._logger.info("HealthScheduler: polling services...")
-
-            futures = {}
-            # Run all health checks concurrently
-            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-                for name, svc_cfg in self.config.services.items():
-                    hc: HealthCheckConfig | None = svc_cfg.healthcheck
-
-                    # Skip services without healthcheck
-                    if hc is None:
-                        continue
-
-                    # Check if the service is currently marked as STOPPED in the database
-                    with get_session() as session:
-                        svc_db = session.exec(
-                            select(Service).where(Service.name == name)
-                        ).one_or_none()
-
-
-                    if svc_db is not None and svc_db.status in (
-                        ContainerStatus.STOPPED,
-                        ContainerStatus.STOPPED.value,
-                    ):
-                        self._logger.debug(
-                            "HealthScheduler: %s is STOPPED, skipping health check",
-                            name,
-                        )
-                        continue
-
-                    # Submit the check to the thread pool
-                    future = executor.submit(self._run_single_check, name, hc)
-                    futures[future] = name
-
-                # Process results sequentially to avoid SQLite locking issues
-                for future in concurrent.futures.as_completed(futures):
-                    name = futures[future]
-                    try:
-                        ok = future.result()
-                        status_str = "HEALTHY" if ok else "UNHEALTHY"
-                        self._logger.info("HealthScheduler: %s -> %s", name, status_str)
-
-                        if ok:
-                            self._restart_attempts.pop(name, None)
-                            self._next_restart_at.pop(name, None)
-
-                        update_service_health(
-                            name,
-                            ok,
-                            reason=None if ok else "health check failed",
-                        )
-
-                        # after DB update, decide & trigger restart if needed
-                        self._handle_post_health(name)
-                    except Exception as exc:  # noqa: BLE001 # pragma: no cover (defensive)
-                        # Defensive guard: one bad service should not kill scheduler
-                        self._logger.error(
-                            "HealthScheduler: error while polling %s: %s",
-                            name,
-                            exc,
-                        )
-
+            self.run_single_pass()
             time.sleep(self.interval_seconds)
 
         self._logger.info("HealthScheduler: poll loop exiting")

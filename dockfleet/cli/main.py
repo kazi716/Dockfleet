@@ -20,7 +20,6 @@ from dockfleet.health.models import PROJECT_ROOT, get_session
 from dockfleet.health.scheduler import HealthScheduler
 from dockfleet.health.scheduler_lock import SchedulerLock
 from dockfleet.health.seed import bootstrap_from_path
-from dockfleet.health.status import update_service_health
 
 app = typer.Typer(help="DockFleet CLI - Manage Docker services from YAML configuration")
 validate_app = typer.Typer()
@@ -483,21 +482,11 @@ def health_dev(
         scheduler = HealthScheduler(config, project_dir=project_dir)
 
         if once:
-            scheduler._logger = logging.getLogger(__name__)
-            for name, svc_cfg in config.services.items():
-                hc = svc_cfg.healthcheck
-                if hc is None:
-                    continue
-                ok = scheduler._run_single_check(name, hc)
+            results = scheduler.run_single_pass()
+            for name, ok in results.items():
                 status_str = "HEALTHY" if ok else "UNHEALTHY"
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 typer.echo(f"[{timestamp}] {name}: {status_str.lower()}")
-                update_service_health(
-                    name,
-                    ok,
-                    reason=None if ok else "health check failed",
-                )
-                scheduler._handle_post_health(name)
             typer.echo("Single health pass complete.")
             return
 
