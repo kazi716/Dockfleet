@@ -387,7 +387,7 @@ def system_status():
     total = len(services)
     running = sum(1 for s in services if s["status"] == ContainerStatus.RUNNING.value)
     restarting = sum(
-        1 for s in services if s["status"] == HealthStatus.RESTARTING.value
+        1 for s in services if s.get("health_status") == HealthStatus.RESTARTING.value
     )
     stopped = sum(1 for s in services if s["status"] == ContainerStatus.STOPPED.value)
 

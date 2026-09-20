@@ -499,7 +499,14 @@ class Orchestrator:
             )
 
             for line in result.stdout.splitlines():
-                name, status = line.split("\t")
+                if not line.strip():
+                    continue
+
+                parts = line.split("\t")
+                if len(parts) < 2:
+                    continue
+
+                name, status = parts[0], parts[1]
 
                 if not name.startswith("dockfleet_"):
                     continue

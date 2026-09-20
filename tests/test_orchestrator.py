@@ -536,3 +536,37 @@ def test_get_service_stats_single_dash_memory(mock_run):
     assert app_stat.cpu_percent == 0.0
     assert app_stat.mem_current == "--/N/A"
 
+
+@patch("dockfleet.core.orchestrator.subprocess.run")
+def test_monitor_services_empty_and_blank_lines(mock_run):
+    """Test that monitor_services does not crash on empty, whitespace, or malformed docker ps output."""
+    config = DockFleetConfig(
+        services={"api": ServiceConfig(image="nginx", restart=RestartPolicy.always)}
+    )
+    orch = Orchestrator(config)
+    orch.handle_unhealthy_service = MagicMock()
+
+    # 1. Completely empty stdout
+    mock_run.return_value = MagicMock(returncode=0, stdout="")
+    orch.monitor_services()
+    orch.handle_unhealthy_service.assert_not_called()
+
+    # 2. Trailing whitespace and blank lines
+    mock_run.return_value = MagicMock(returncode=0, stdout="\n   \n\t\n\r\n")
+    orch.monitor_services()
+    orch.handle_unhealthy_service.assert_not_called()
+
+    # 3. Malformed line without tab delimiter
+    mock_run.return_value = MagicMock(returncode=0, stdout="dockfleet_api_no_tab_here\n")
+    orch.monitor_services()
+    orch.handle_unhealthy_service.assert_not_called()
+
+    # 4. Valid exited service line with blank lines
+    mock_run.return_value = MagicMock(
+        returncode=0,
+        stdout="\n\ndockfleet_api\tExited (1) 2 seconds ago\n\n",
+    )
+    orch.monitor_services()
+    orch.handle_unhealthy_service.assert_called_once_with("api", reason="health failure")
+
+

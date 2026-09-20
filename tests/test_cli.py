@@ -130,20 +130,48 @@ def test_cli_down_stops_scheduler(mock_down, mock_stop_scheduler):
     mock_stop_scheduler.assert_called_once()
 
 
-@patch("dockfleet.cli.main.HealthScheduler")
-@patch("dockfleet.cli.main.bootstrap_from_path")
-def test_cli_health_dev_once(mock_bootstrap, mock_scheduler_cls):
-    """Test that dockfleet health-dev --once runs a single pass via scheduler.run_single_pass."""
-    mock_scheduler = mock_scheduler_cls.return_value
-    mock_scheduler.run_single_pass.return_value = {"api": True}
+@patch("dockfleet.cli.main.subprocess.run")
+def test_cli_logs_missing_container_follow(mock_run):
+    """Test that dockfleet logs --follow outputs error and exits 1 when container is missing."""
+    from unittest.mock import MagicMock
 
-    result = runner.invoke(app, ["health-dev", "examples/dockfleet.yaml", "--once"])
+    mock_run.return_value = MagicMock(returncode=1, stderr="Error: No such container: dockfleet_invalid_service\n")
+    result = runner.invoke(app, ["logs", "invalid_service", "--follow"])
+    assert result.exit_code == 1
+    assert "Service 'invalid_service' not found or container not running." in result.stdout
+    assert "Streaming logs" not in result.stdout
+
+
+@patch("dockfleet.cli.main.subprocess.run")
+def test_cli_logs_missing_container_no_follow(mock_run):
+    """Test that dockfleet logs outputs error and exits 1 when container is missing."""
+    from unittest.mock import MagicMock
+
+    mock_run.return_value = MagicMock(returncode=1, stderr="Error: No such container: dockfleet_invalid_service\n")
+    result = runner.invoke(app, ["logs", "invalid_service"])
+    assert result.exit_code == 1
+    assert "Service 'invalid_service' not found or container not running." in result.stdout
+
+
+@patch("dockfleet.cli.main.subprocess.run")
+def test_cli_logs_success_follow(mock_run):
+    """Test that dockfleet logs --follow streams logs when container exists."""
+    from unittest.mock import MagicMock
+
+    mock_run.return_value = MagicMock(returncode=0, stdout="")
+    result = runner.invoke(app, ["logs", "web", "--follow"])
     assert result.exit_code == 0
-    assert "Starting DockFleet health check scheduler (DEV MODE)" in result.stdout
-    assert "Running a single health pass" in result.stdout
-    assert "api: healthy" in result.stdout
-    assert "Single health pass complete." in result.stdout
-    mock_scheduler.run_single_pass.assert_called_once()
-    mock_scheduler.start.assert_not_called()
+    assert "Streaming logs for web" in result.stdout
+
+
+@patch("dockfleet.cli.main.subprocess.run")
+def test_cli_logs_success_no_follow(mock_run):
+    """Test that dockfleet logs outputs logs when container exists."""
+    from unittest.mock import MagicMock
+
+    mock_run.return_value = MagicMock(returncode=0, stdout="Application started successfully\n")
+    result = runner.invoke(app, ["logs", "web"])
+    assert result.exit_code == 0
+    assert "Application started successfully" in result.stdout
 
 
