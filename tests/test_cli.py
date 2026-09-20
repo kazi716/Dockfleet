@@ -175,3 +175,51 @@ def test_cli_logs_success_no_follow(mock_run):
     assert "Application started successfully" in result.stdout
 
 
+def test_stop_background_scheduler_missing_pid_file(tmp_path):
+    from dockfleet.cli.main import stop_background_scheduler
+
+    assert stop_background_scheduler(tmp_path) is False
+
+
+def test_stop_background_scheduler_dead_pid(tmp_path):
+    import json
+    from dockfleet.cli.main import stop_background_scheduler
+    from dockfleet.health.scheduler_lock import SchedulerLock
+
+    pid_file = tmp_path / SchedulerLock.PID_FILENAME
+    pid_file.write_text(json.dumps({"pid": 9999999}))
+    assert stop_background_scheduler(tmp_path) is False
+
+
+@patch("dockfleet.cli.main.SchedulerLock._pid_is_running", return_value=True)
+@patch("dockfleet.cli.main.os.kill")
+def test_stop_background_scheduler_posix(mock_kill, mock_pid_running, tmp_path, monkeypatch):
+    import json
+    import signal
+    from dockfleet.cli.main import stop_background_scheduler
+    from dockfleet.health.scheduler_lock import SchedulerLock
+
+    monkeypatch.setattr("sys.platform", "linux")
+    pid_file = tmp_path / SchedulerLock.PID_FILENAME
+    pid_file.write_text(json.dumps({"pid": 1234}))
+
+    assert stop_background_scheduler(tmp_path) is True
+    mock_kill.assert_called_once_with(1234, signal.SIGTERM)
+
+
+@patch("dockfleet.cli.main.SchedulerLock._pid_is_running", return_value=True)
+@patch("dockfleet.cli.main.os.kill")
+def test_stop_background_scheduler_windows(mock_kill, mock_pid_running, tmp_path, monkeypatch):
+    import json
+    import signal
+    from dockfleet.cli.main import stop_background_scheduler
+    from dockfleet.health.scheduler_lock import SchedulerLock
+
+    monkeypatch.setattr("sys.platform", "win32")
+    pid_file = tmp_path / SchedulerLock.PID_FILENAME
+    pid_file.write_text(json.dumps({"pid": 1234}))
+
+    assert stop_background_scheduler(tmp_path) is True
+    mock_kill.assert_called_once_with(1234, signal.SIGTERM)
+
+

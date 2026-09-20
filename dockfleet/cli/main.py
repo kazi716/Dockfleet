@@ -55,6 +55,7 @@ def spawn_background_scheduler(config_path: Path | str) -> subprocess.Popen:
 def stop_background_scheduler(project_dir: Path = PROJECT_ROOT) -> bool:
     """
     Attempt to stop a running background scheduler process by reading .scheduler.pid.
+    Handles process termination across both POSIX and Windows operating systems.
     """
     pid_file = Path(project_dir) / SchedulerLock.PID_FILENAME
     if not pid_file.exists():
@@ -64,7 +65,28 @@ def stop_background_scheduler(project_dir: Path = PROJECT_ROOT) -> bool:
         info = json.loads(pid_file.read_text(encoding="utf-8"))
         pid = info.get("pid")
         if pid and SchedulerLock._pid_is_running(pid):
-            os.kill(pid, signal.SIGTERM)
+            if sys.platform == "win32":
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except (OSError, PermissionError):
+                    import ctypes
+
+                    PROCESS_TERMINATE = 0x0001
+                    kernel32 = ctypes.windll.kernel32
+                    h_proc = kernel32.OpenProcess(PROCESS_TERMINATE, False, pid)
+                    if h_proc:
+                        try:
+                            kernel32.TerminateProcess(h_proc, 1)
+                        finally:
+                            kernel32.CloseHandle(h_proc)
+                    else:
+                        subprocess.run(
+                            ["taskkill", "/F", "/T", "/PID", str(pid)],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+            else:
+                os.kill(pid, signal.SIGTERM)
             return True
     except Exception:
         pass
