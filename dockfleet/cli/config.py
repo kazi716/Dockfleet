@@ -79,7 +79,7 @@ class ServiceConfig(BaseModel):
     @field_validator("ports")
     @classmethod
     def validate_ports(cls, value):
-        """Validate port mappings conform to host:container format."""
+        """Validate port mappings conform to host:container format and valid port range (1-65535)."""
         if value is None:
             return value
 
@@ -89,6 +89,15 @@ class ServiceConfig(BaseModel):
             if not pattern.match(port):
                 raise ValueError(
                     f"Invalid port mapping '{port}'. Expected format 'host:container'"
+                )
+
+            host_str, container_str = port.split(":")
+            host_port = int(host_str)
+            container_port = int(container_str)
+
+            if not (1 <= host_port <= 65535 and 1 <= container_port <= 65535):
+                raise ValueError(
+                    f"Invalid port mapping '{port}'. Port values must be between 1 and 65535"
                 )
 
         return value

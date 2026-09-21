@@ -273,3 +273,36 @@ def test_valid_tcp_and_http_healthchecks_with_endpoint():
     parsed = DockFleetConfig(**config)
     assert parsed.services["web"].healthcheck.endpoint == "http://localhost:8080/health"
     assert parsed.services["db"].healthcheck.endpoint == "localhost:5432"
+
+
+def test_valid_ports():
+    config = {
+        "services": {
+            "api": {
+                "image": "nginx",
+                "restart": "always",
+                "ports": ["80:80", "1:1", "65535:65535", "8080:80"],
+            }
+        }
+    }
+    parsed = DockFleetConfig(**config)
+    assert parsed.services["api"].ports == ["80:80", "1:1", "65535:65535", "8080:80"]
+
+
+@pytest.mark.parametrize(
+    "invalid_port",
+    ["0:80", "80:0", "65536:80", "80:65536", "70000:8080", "80:99999"],
+)
+def test_out_of_range_ports(invalid_port):
+    config = {
+        "services": {
+            "api": {
+                "image": "nginx",
+                "restart": "always",
+                "ports": [invalid_port],
+            }
+        }
+    }
+    with pytest.raises(ValueError, match="Port values must be between 1 and 65535"):
+        DockFleetConfig(**config)
+
