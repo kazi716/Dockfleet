@@ -1,11 +1,12 @@
 import subprocess
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
-from sqlmodel import Session, select
+from sqlmodel import select
 
 from dockfleet.core.logs import get_logs_services, stream_container_logs
 from dockfleet.core.orchestrator import get_orchestrator
@@ -33,7 +34,7 @@ from dockfleet.health.status import (
 )
 
 router = APIRouter()
-templates = Jinja2Templates(directory="dockfleet/dashboard/templates")
+templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
