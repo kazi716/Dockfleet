@@ -36,7 +36,7 @@ restart_policy – restart policy of the service
 restart_count – number of automatic restarts  
 last_health_check – timestamp of last health check
 
-Future versions will also expose CPU and memory usage.
+CPU and memory usage are exposed per service via the `GET /services` endpoint (collected locally with `docker stats`).
 
 ### Dashboard Controls
 

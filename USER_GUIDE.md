@@ -103,7 +103,7 @@ pip install -e .
 
 ---
 
-### **Dashboard**
+## 3. Dashboard
 
 Start dashboard:
 
@@ -115,11 +115,11 @@ Then Open your browser:
 
 ---
 
-### First Run:
+## 4. First Run:
 
 After setting up the development environment, you can run DockFleet using the example configuration.
 
-## Quick Start:
+### Quick Start:
 
 #### <u>CLI Commands:</u>
 
@@ -289,7 +289,7 @@ Health results are stored in SQLite and will later be used by DockFleet to trigg
 
 ---
 
-## 7. Common Errors
+## 6. Common Errors
 
 ### Invalid YAML
 
@@ -346,7 +346,7 @@ Fix:
 
 ---
 
-## 8. Quick Workflow
+## 7. Quick Workflow
 
 It is highly recommended to validate your configuration before starting the stack:
 1. Create or edit your `dockfleet.yaml`
