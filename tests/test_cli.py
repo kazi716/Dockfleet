@@ -29,6 +29,23 @@ services:
     assert "Configuration Validation Error" in result.output
 
 
+def test_cli_validate_out_of_range_port(tmp_path):
+    bad_config = tmp_path / "bad_port.yaml"
+    bad_config.write_text("""
+services:
+  web:
+    image: nginx
+    restart: always
+    ports:
+      - "80:70000"
+""")
+    result = runner.invoke(app, ["validate", str(bad_config)])
+    assert result.exit_code == 1
+    assert "Configuration Validation Error" in result.output
+    assert "Port values must be between 1 and 65535" in result.output
+
+
+
 @patch("dockfleet.cli.main.Orchestrator.restart")
 def test_cli_restart(mock_restart):
     """Test that the restart command executes successfully without crashing."""
