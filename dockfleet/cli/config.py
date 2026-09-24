@@ -79,7 +79,7 @@ class ServiceConfig(BaseModel):
     @field_validator("ports")
     @classmethod
     def validate_ports(cls, value):
-        """Validate port mappings conform to host:container format."""
+        """Validate port mappings conform to host:container format and valid port range (1-65535)."""
         if value is None:
             return value
 
@@ -91,13 +91,22 @@ class ServiceConfig(BaseModel):
                     f"Invalid port mapping '{port}'. Expected format 'host:container'"
                 )
 
+            host_str, container_str = port.split(":")
+            host_port = int(host_str)
+            container_port = int(container_str)
+
+            if not (1 <= host_port <= 65535 and 1 <= container_port <= 65535):
+                raise ValueError(
+                    f"Invalid port mapping '{port}'. Port values must be between 1 and 65535"
+                )
+
         return value
 
     # HEALTHCHECK VALIDATION
     @field_validator("healthcheck")
     @classmethod
     def validate_healthcheck(cls, value):
-        """Validate health check has type and interval specified."""
+        """Validate health check has type and interval specified, and endpoint when required."""
         if value is None:
             return value
 
@@ -106,6 +115,11 @@ class ServiceConfig(BaseModel):
 
         if value.interval is None:
             raise ValueError("healthcheck.interval is required")
+
+        if value.type.lower() in {"http", "tcp"} and not value.endpoint:
+            raise ValueError(
+                f"healthcheck.endpoint is required when type is '{value.type}'"
+            )
 
         return value
 
@@ -170,7 +184,7 @@ class DockFleetConfig(BaseModel):
     @field_validator("services")
     @classmethod
     def validate_depends_on(cls, services):
-        """Validate dependency references point to existing services."""
+        """Validate dependency references and reject circular service graphs."""
         for name, svc in services.items():
             if svc.depends_on:
                 for dep in svc.depends_on:
@@ -178,6 +192,32 @@ class DockFleetConfig(BaseModel):
                         raise ValueError(
                             f"{name}: depends_on references unknown service '{dep}'"
                         )
+
+        visited: set[str] = set()
+        visiting: set[str] = set()
+        path: list[str] = []
+
+        def visit(name: str) -> None:
+            if name in visiting:
+                cycle_start = path.index(name)
+                cycle = path[cycle_start:] + [name]
+                raise ValueError(
+                    "circular depends_on relationship: " + " -> ".join(cycle)
+                )
+
+            if name in visited:
+                return
+
+            visiting.add(name)
+            path.append(name)
+            for dependency in services[name].depends_on or []:
+                visit(dependency)
+            path.pop()
+            visiting.remove(name)
+            visited.add(name)
+
+        for name in services:
+            visit(name)
         return services
 
 

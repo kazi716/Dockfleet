@@ -10,16 +10,16 @@ from datetime import datetime
 from pathlib import Path
 
 import typer
-from sqlmodel import Session, select
+from pydantic import ValidationError
+from sqlmodel import select
 
 from dockfleet.cli.config import load_config
 from dockfleet.core.orchestrator import Orchestrator
 from dockfleet.health.logs import LogEvent
-from dockfleet.health.models import PROJECT_ROOT, engine
+from dockfleet.health.models import PROJECT_ROOT, get_session
 from dockfleet.health.scheduler import HealthScheduler
 from dockfleet.health.scheduler_lock import SchedulerLock
 from dockfleet.health.seed import bootstrap_from_path
-from dockfleet.health.status import update_service_health
 
 app = typer.Typer(help="DockFleet CLI - Manage Docker services from YAML configuration")
 validate_app = typer.Typer()
@@ -55,6 +55,7 @@ def spawn_background_scheduler(config_path: Path | str) -> subprocess.Popen:
 def stop_background_scheduler(project_dir: Path = PROJECT_ROOT) -> bool:
     """
     Attempt to stop a running background scheduler process by reading .scheduler.pid.
+    Handles process termination across both POSIX and Windows operating systems.
     """
     pid_file = Path(project_dir) / SchedulerLock.PID_FILENAME
     if not pid_file.exists():
@@ -64,7 +65,28 @@ def stop_background_scheduler(project_dir: Path = PROJECT_ROOT) -> bool:
         info = json.loads(pid_file.read_text(encoding="utf-8"))
         pid = info.get("pid")
         if pid and SchedulerLock._pid_is_running(pid):
-            os.kill(pid, signal.SIGTERM)
+            if sys.platform == "win32":
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except (OSError, PermissionError):
+                    import ctypes
+
+                    PROCESS_TERMINATE = 0x0001
+                    kernel32 = ctypes.windll.kernel32
+                    h_proc = kernel32.OpenProcess(PROCESS_TERMINATE, False, pid)
+                    if h_proc:
+                        try:
+                            kernel32.TerminateProcess(h_proc, 1)
+                        finally:
+                            kernel32.CloseHandle(h_proc)
+                    else:
+                        subprocess.run(
+                            ["taskkill", "/F", "/T", "/PID", str(pid)],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+            else:
+                os.kill(pid, signal.SIGTERM)
             return True
     except Exception:
         pass
@@ -92,6 +114,7 @@ def main(
     ),
 ):
     pass
+
 
 # ------------------------------------------------
 # Logging setup for health scheduler
@@ -315,12 +338,22 @@ def logs(
     container_name = f"dockfleet_{service}"
 
     try:
+        inspect_res = subprocess.run(
+            ["docker", "inspect", container_name],
+            capture_output=True,
+            text=True,
+        )
+        if inspect_res.returncode != 0:
+            typer.echo(f"Service '{service}' not found or container not running.")
+            raise typer.Exit(code=1)
+
         if follow:
             typer.echo(f"Streaming logs for {service} (Ctrl+C to stop)\n")
             result = subprocess.run(
                 ["docker", "logs", "-f", "--tail", str(lines), container_name]
             )
             if result.returncode != 0:
+                typer.echo(f"Service '{service}' not found or container not running.")
                 raise typer.Exit(code=1)
         else:
             result = subprocess.run(
@@ -358,7 +391,7 @@ def show_logs(
     Show aggregated logs stored in DockFleet database.
     """
     try:
-        with Session(engine) as session:
+        with get_session() as session:
             query = select(LogEvent).limit(limit)
 
             if service:
@@ -472,21 +505,11 @@ def health_dev(
         scheduler = HealthScheduler(config, project_dir=project_dir)
 
         if once:
-            scheduler._logger = logging.getLogger(__name__)
-            for name, svc_cfg in config.services.items():
-                hc = svc_cfg.healthcheck
-                if hc is None:
-                    continue
-                ok = scheduler._run_single_check(name, hc)
+            results = scheduler.run_single_pass()
+            for name, ok in results.items():
                 status_str = "HEALTHY" if ok else "UNHEALTHY"
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 typer.echo(f"[{timestamp}] {name}: {status_str.lower()}")
-                update_service_health(
-                    name,
-                    ok,
-                    reason=None if ok else "health check failed",
-                )
-                scheduler._handle_post_health(name)
             typer.echo("Single health pass complete.")
             return
 

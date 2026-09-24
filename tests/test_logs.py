@@ -421,3 +421,18 @@ async def test_reader_exception_propagation(mock_popen, mock_store, caplog):
         and record.exc_info is not None
         for record in caplog.records
     )
+
+
+@pytest.mark.asyncio
+@patch("dockfleet.core.logs.subprocess.Popen")
+async def test_popen_spawn_failure_loop_bound_safely(mock_popen):
+    """When subprocess.Popen fails to spawn, loop is bound safely and does not raise UnboundLocalError."""
+    mock_popen.side_effect = FileNotFoundError("No docker executable found")
+
+    events = []
+    async for event in stream_container_logs("api"):
+        events.append(event)
+
+    assert len(events) == 1
+    assert "Docker is not installed or not in PATH" in events[0]
+

@@ -138,7 +138,7 @@ Health results and restart events are stored in SQLite and later used by the das
 
 ---
 
-### Database Layer (`dockfleet/db`, SQLite)
+### Database Layer (SQLite)
 
 DockFleet uses SQLite to store runtime data such as:
 
@@ -147,11 +147,10 @@ DockFleet uses SQLite to store runtime data such as:
 - Restart counts and restart history  
 - Log metadata (service, timestamp, message, severity) used by the log viewer and crash analytics
 
-The `dockfleet/db` package contains:
+The database code currently lives in the `dockfleet/health` package:
 
-- Models (SQLModel/SQLAlchemy)  
-- Session/engine setup  
-- Shared query helpers used by the health engine, dashboard, and analytics
+- Models (SQLModel/SQLAlchemy) and session/engine setup → `dockfleet/health/models.py`  
+- Shared query helpers used by the health engine, dashboard, and analytics → `dockfleet/health/queries.py`
 
 SQLite was chosen because it’s lightweight, embedded, and requires no additional setup.
 

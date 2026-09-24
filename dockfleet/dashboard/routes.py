@@ -1,11 +1,12 @@
 import subprocess
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
-from sqlmodel import Session, select
+from sqlmodel import select
 
 from dockfleet.core.logs import get_logs_services, stream_container_logs
 from dockfleet.core.orchestrator import get_orchestrator
@@ -20,7 +21,7 @@ from dockfleet.health.models import (
     HealthStatus,
     LogEvent,
     RestartEvent,
-    engine,
+    get_session,
 )
 from dockfleet.health.queries import (
     get_failure_reasons_breakdown,
@@ -33,7 +34,7 @@ from dockfleet.health.status import (
 )
 
 router = APIRouter()
-templates = Jinja2Templates(directory="dockfleet/dashboard/templates")
+templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -312,7 +313,7 @@ async def explore_logs(service_name: str, days: int = 1):
     """Retrieve time-windowed log records for a service."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
-    with Session(engine) as session:
+    with get_session() as session:
         statement = (
             select(LogEvent)
             .where(
@@ -387,7 +388,7 @@ def system_status():
     total = len(services)
     running = sum(1 for s in services if s["status"] == ContainerStatus.RUNNING.value)
     restarting = sum(
-        1 for s in services if s["status"] == HealthStatus.RESTARTING.value
+        1 for s in services if s.get("health_status") == HealthStatus.RESTARTING.value
     )
     stopped = sum(1 for s in services if s["status"] == ContainerStatus.STOPPED.value)
 
@@ -478,7 +479,7 @@ def get_metrics():
     total_restarts = sum(s.get("restart_count", 0) for s in services)
 
     since = datetime.now(timezone.utc) - timedelta(hours=24)
-    with Session(engine) as session:
+    with get_session() as session:
         stmt = select(RestartEvent).where(RestartEvent.restarted_at >= since)
         health_failures = len(session.exec(stmt).all())
 
@@ -518,7 +519,7 @@ def analytics_summary(
     since = datetime.now(timezone.utc) - timedelta(hours=window_hours)
     base = get_most_unstable_services(limit=limit, window_hours=window_hours)
 
-    with Session(engine) as session:
+    with get_session() as session:
         stmt_total = select(RestartEvent).where(RestartEvent.restarted_at >= since)
         all_events = session.exec(stmt_total).all()
         total_restarts = len(all_events)
@@ -572,7 +573,7 @@ def analytics_unstable_services(
     """Retrieve top unstable services ranked by restart frequency."""
     base = get_most_unstable_services(limit=limit, window_hours=window_hours)
 
-    with Session(engine) as session:
+    with get_session() as session:
         results: list[UnstableService] = []
         for row in base:
             name = row["service_name"]

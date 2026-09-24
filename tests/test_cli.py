@@ -29,6 +29,23 @@ services:
     assert "Configuration Validation Error" in result.output
 
 
+def test_cli_validate_out_of_range_port(tmp_path):
+    bad_config = tmp_path / "bad_port.yaml"
+    bad_config.write_text("""
+services:
+  web:
+    image: nginx
+    restart: always
+    ports:
+      - "80:70000"
+""")
+    result = runner.invoke(app, ["validate", str(bad_config)])
+    assert result.exit_code == 1
+    assert "Configuration Validation Error" in result.output
+    assert "Port values must be between 1 and 65535" in result.output
+
+
+
 @patch("dockfleet.cli.main.Orchestrator.restart")
 def test_cli_restart(mock_restart):
     """Test that the restart command executes successfully without crashing."""
@@ -128,4 +145,98 @@ def test_cli_down_stops_scheduler(mock_down, mock_stop_scheduler):
     assert "Services stopped" in result.stdout
     mock_down.assert_called_once()
     mock_stop_scheduler.assert_called_once()
+
+
+@patch("dockfleet.cli.main.subprocess.run")
+def test_cli_logs_missing_container_follow(mock_run):
+    """Test that dockfleet logs --follow outputs error and exits 1 when container is missing."""
+    from unittest.mock import MagicMock
+
+    mock_run.return_value = MagicMock(returncode=1, stderr="Error: No such container: dockfleet_invalid_service\n")
+    result = runner.invoke(app, ["logs", "invalid_service", "--follow"])
+    assert result.exit_code == 1
+    assert "Service 'invalid_service' not found or container not running." in result.stdout
+    assert "Streaming logs" not in result.stdout
+
+
+@patch("dockfleet.cli.main.subprocess.run")
+def test_cli_logs_missing_container_no_follow(mock_run):
+    """Test that dockfleet logs outputs error and exits 1 when container is missing."""
+    from unittest.mock import MagicMock
+
+    mock_run.return_value = MagicMock(returncode=1, stderr="Error: No such container: dockfleet_invalid_service\n")
+    result = runner.invoke(app, ["logs", "invalid_service"])
+    assert result.exit_code == 1
+    assert "Service 'invalid_service' not found or container not running." in result.stdout
+
+
+@patch("dockfleet.cli.main.subprocess.run")
+def test_cli_logs_success_follow(mock_run):
+    """Test that dockfleet logs --follow streams logs when container exists."""
+    from unittest.mock import MagicMock
+
+    mock_run.return_value = MagicMock(returncode=0, stdout="")
+    result = runner.invoke(app, ["logs", "web", "--follow"])
+    assert result.exit_code == 0
+    assert "Streaming logs for web" in result.stdout
+
+
+@patch("dockfleet.cli.main.subprocess.run")
+def test_cli_logs_success_no_follow(mock_run):
+    """Test that dockfleet logs outputs logs when container exists."""
+    from unittest.mock import MagicMock
+
+    mock_run.return_value = MagicMock(returncode=0, stdout="Application started successfully\n")
+    result = runner.invoke(app, ["logs", "web"])
+    assert result.exit_code == 0
+    assert "Application started successfully" in result.stdout
+
+
+def test_stop_background_scheduler_missing_pid_file(tmp_path):
+    from dockfleet.cli.main import stop_background_scheduler
+
+    assert stop_background_scheduler(tmp_path) is False
+
+
+def test_stop_background_scheduler_dead_pid(tmp_path):
+    import json
+    from dockfleet.cli.main import stop_background_scheduler
+    from dockfleet.health.scheduler_lock import SchedulerLock
+
+    pid_file = tmp_path / SchedulerLock.PID_FILENAME
+    pid_file.write_text(json.dumps({"pid": 9999999}))
+    assert stop_background_scheduler(tmp_path) is False
+
+
+@patch("dockfleet.cli.main.SchedulerLock._pid_is_running", return_value=True)
+@patch("dockfleet.cli.main.os.kill")
+def test_stop_background_scheduler_posix(mock_kill, mock_pid_running, tmp_path, monkeypatch):
+    import json
+    import signal
+    from dockfleet.cli.main import stop_background_scheduler
+    from dockfleet.health.scheduler_lock import SchedulerLock
+
+    monkeypatch.setattr("sys.platform", "linux")
+    pid_file = tmp_path / SchedulerLock.PID_FILENAME
+    pid_file.write_text(json.dumps({"pid": 1234}))
+
+    assert stop_background_scheduler(tmp_path) is True
+    mock_kill.assert_called_once_with(1234, signal.SIGTERM)
+
+
+@patch("dockfleet.cli.main.SchedulerLock._pid_is_running", return_value=True)
+@patch("dockfleet.cli.main.os.kill")
+def test_stop_background_scheduler_windows(mock_kill, mock_pid_running, tmp_path, monkeypatch):
+    import json
+    import signal
+    from dockfleet.cli.main import stop_background_scheduler
+    from dockfleet.health.scheduler_lock import SchedulerLock
+
+    monkeypatch.setattr("sys.platform", "win32")
+    pid_file = tmp_path / SchedulerLock.PID_FILENAME
+    pid_file.write_text(json.dumps({"pid": 1234}))
+
+    assert stop_background_scheduler(tmp_path) is True
+    mock_kill.assert_called_once_with(1234, signal.SIGTERM)
+
 

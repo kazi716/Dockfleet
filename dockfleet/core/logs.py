@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 async def stream_container_logs(service_name: str):
     """100% reliable: async log streaming with concurrent stdout/stderr draining."""
     container = f"dockfleet_{service_name}"
+    loop = asyncio.get_running_loop()
 
     async def event_gen():
         """Asynchronous generator yielding log events with retry logic."""
@@ -30,7 +31,6 @@ async def stream_container_logs(service_name: str):
                     bufsize=1,
                     universal_newlines=True,
                 )
-                loop = asyncio.get_running_loop()
                 queue = asyncio.Queue(maxsize=1000)
                 stderr_buffer = []
 

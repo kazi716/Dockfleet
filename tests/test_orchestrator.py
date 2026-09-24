@@ -1,3 +1,4 @@
+import subprocess
 import threading
 from unittest.mock import MagicMock, Mock, patch
 
@@ -434,15 +435,16 @@ def test_concurrent_get_reset_no_stale_instance():
                 reset_orchestrator()
 
         threads = [
-            threading.Thread(target=getter),
-            threading.Thread(target=getter),
-            threading.Thread(target=getter),
-            threading.Thread(target=resetting),
-            threading.Thread(target=resetting),
+            threading.Thread(target=getter, daemon=True),
+            threading.Thread(target=getter, daemon=True),
+            threading.Thread(target=getter, daemon=True),
+            threading.Thread(target=resetting, daemon=True),
+            threading.Thread(target=resetting, daemon=True),
         ]
         for t in threads:
             t.start()
         stop.wait(timeout=0.3)
+        stop.set()
         for t in threads:
             t.join(timeout=2)
 
@@ -534,4 +536,120 @@ def test_get_service_stats_single_dash_memory(mock_run):
     assert app_stat.status == ContainerStatus.RUNNING
     assert app_stat.cpu_percent == 0.0
     assert app_stat.mem_current == "--/N/A"
+
+
+@patch("dockfleet.core.orchestrator.subprocess.run")
+def test_monitor_services_empty_and_blank_lines(mock_run):
+    """Test that monitor_services does not crash on empty, whitespace, or malformed docker ps output."""
+    config = DockFleetConfig(
+        services={"api": ServiceConfig(image="nginx", restart=RestartPolicy.always)}
+    )
+    orch = Orchestrator(config)
+    orch.handle_unhealthy_service = MagicMock()
+
+    # 1. Completely empty stdout
+    mock_run.return_value = MagicMock(returncode=0, stdout="")
+    orch.monitor_services()
+    orch.handle_unhealthy_service.assert_not_called()
+
+    # 2. Trailing whitespace and blank lines
+    mock_run.return_value = MagicMock(returncode=0, stdout="\n   \n\t\n\r\n")
+    orch.monitor_services()
+    orch.handle_unhealthy_service.assert_not_called()
+
+    # 3. Malformed line without tab delimiter
+    mock_run.return_value = MagicMock(returncode=0, stdout="dockfleet_api_no_tab_here\n")
+    orch.monitor_services()
+    orch.handle_unhealthy_service.assert_not_called()
+
+    # 4. Valid exited service line with blank lines
+    mock_run.return_value = MagicMock(
+        returncode=0,
+        stdout="\n\ndockfleet_api\tExited (1) 2 seconds ago\n\n",
+    )
+    orch.monitor_services()
+    orch.handle_unhealthy_service.assert_called_once_with("api", reason="health failure")
+
+
+@patch("dockfleet.core.orchestrator.subprocess.Popen")
+def test_get_logs_normal_execution(mock_popen):
+    """Test get_logs yields lines and closes process on normal stream completion."""
+    from dockfleet.core.orchestrator import get_logs
+
+    mock_proc = MagicMock()
+    mock_proc.stdout.readline.side_effect = ["line 1\n", "line 2\n", ""]
+    mock_proc.poll.return_value = 0
+    mock_popen.return_value = mock_proc
+
+    gen = get_logs("web", lines=50, follow=False)
+    lines = list(gen)
+
+    assert lines == ["line 1", "line 2"]
+    mock_popen.assert_called_once_with(
+        ["docker", "logs", "dockfleet_web", "--tail", "50"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    mock_proc.stdout.close.assert_called_once()
+
+
+@patch("dockfleet.core.orchestrator.subprocess.Popen")
+def test_get_logs_early_generator_break_cleans_up_process(mock_popen):
+    """Test get_logs terminates running process in finally block if generator caller breaks early."""
+    from dockfleet.core.orchestrator import get_logs
+
+    mock_proc = MagicMock()
+    mock_proc.stdout.readline.side_effect = ["line 1\n", "line 2\n", "line 3\n"]
+    mock_proc.poll.return_value = None  # process still running
+    mock_popen.return_value = mock_proc
+
+    gen = get_logs("web", follow=True)
+    first_line = next(gen)
+    assert first_line == "line 1"
+
+    # Close the generator prematurely (simulating client disconnect)
+    gen.close()
+
+    mock_proc.stdout.close.assert_called_once()
+    mock_proc.terminate.assert_called_once()
+
+
+@patch("dockfleet.core.orchestrator.subprocess.Popen")
+def test_get_logs_popen_exception_handled_gracefully(mock_popen):
+    """Test get_logs handles Popen exceptions gracefully and yields error message."""
+    from dockfleet.core.orchestrator import get_logs
+
+    mock_popen.side_effect = FileNotFoundError("docker executable not found")
+
+    gen = get_logs("web")
+    lines = list(gen)
+
+    assert len(lines) == 1
+    assert "Error: docker executable not found" in lines[0]
+
+
+@patch("dockfleet.core.orchestrator.subprocess.Popen")
+def test_get_logs_stdout_close_exception_does_not_prevent_process_termination(mock_popen):
+    """Test that an exception during process.stdout.close() does not skip process termination."""
+    from dockfleet.core.orchestrator import get_logs
+
+    mock_proc = MagicMock()
+    mock_proc.stdout.readline.side_effect = ["line 1\n", "line 2\n"]
+    mock_proc.stdout.close.side_effect = OSError("stdout close error")
+    mock_proc.poll.return_value = None  # process still running
+    mock_popen.return_value = mock_proc
+
+    gen = get_logs("web", follow=True)
+    first_line = next(gen)
+    assert first_line == "line 1"
+
+    # Close the generator prematurely (simulating client disconnect)
+    gen.close()
+
+    mock_proc.stdout.close.assert_called_once()
+    mock_proc.terminate.assert_called_once()
+
+
+
 

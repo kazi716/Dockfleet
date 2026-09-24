@@ -62,6 +62,26 @@ def test_invalid_depends_on():
         DockFleetConfig(**config)
 
 
+def test_circular_depends_on_is_rejected_during_validation():
+    config = {
+        "services": {
+            "api": {
+                "image": "nginx",
+                "restart": "always",
+                "depends_on": ["worker"],
+            },
+            "worker": {
+                "image": "nginx",
+                "restart": "always",
+                "depends_on": ["api"],
+            },
+        }
+    }
+
+    with pytest.raises(ValueError, match="circular depends_on relationship: api -> worker -> api"):
+        DockFleetConfig(**config)
+
+
 def test_valid_environment_list():
     config = {
         "services": {
@@ -174,3 +194,115 @@ def test_invalid_backoff_multiplier():
 
     with pytest.raises(ValueError):
         DockFleetConfig(**config)
+
+
+def test_tcp_healthcheck_missing_endpoint():
+    config = {
+        "services": {
+            "api": {
+                "image": "nginx",
+                "restart": "always",
+                "healthcheck": {
+                    "type": "tcp",
+                    "interval": 10,
+                },
+            }
+        }
+    }
+    with pytest.raises(ValueError, match="endpoint"):
+        DockFleetConfig(**config)
+
+
+def test_http_healthcheck_missing_endpoint():
+    config = {
+        "services": {
+            "api": {
+                "image": "nginx",
+                "restart": "always",
+                "healthcheck": {
+                    "type": "http",
+                    "interval": 10,
+                },
+            }
+        }
+    }
+    with pytest.raises(ValueError, match="endpoint"):
+        DockFleetConfig(**config)
+
+
+def test_process_healthcheck_without_endpoint():
+    config = {
+        "services": {
+            "api": {
+                "image": "nginx",
+                "restart": "always",
+                "healthcheck": {
+                    "type": "process",
+                    "interval": 10,
+                },
+            }
+        }
+    }
+    parsed = DockFleetConfig(**config)
+    assert parsed.services["api"].healthcheck.endpoint is None
+
+
+def test_valid_tcp_and_http_healthchecks_with_endpoint():
+    config = {
+        "services": {
+            "web": {
+                "image": "nginx",
+                "restart": "always",
+                "healthcheck": {
+                    "type": "http",
+                    "endpoint": "http://localhost:8080/health",
+                    "interval": 10,
+                },
+            },
+            "db": {
+                "image": "postgres:15",
+                "restart": "always",
+                "healthcheck": {
+                    "type": "tcp",
+                    "endpoint": "localhost:5432",
+                    "interval": 30,
+                },
+            },
+        }
+    }
+    parsed = DockFleetConfig(**config)
+    assert parsed.services["web"].healthcheck.endpoint == "http://localhost:8080/health"
+    assert parsed.services["db"].healthcheck.endpoint == "localhost:5432"
+
+
+def test_valid_ports():
+    config = {
+        "services": {
+            "api": {
+                "image": "nginx",
+                "restart": "always",
+                "ports": ["80:80", "1:1", "65535:65535", "8080:80"],
+            }
+        }
+    }
+    parsed = DockFleetConfig(**config)
+    assert parsed.services["api"].ports == ["80:80", "1:1", "65535:65535", "8080:80"]
+
+
+@pytest.mark.parametrize(
+    "invalid_port",
+    ["0:80", "80:0", "65536:80", "80:65536", "70000:8080", "80:99999"],
+)
+def test_out_of_range_ports(invalid_port):
+    config = {
+        "services": {
+            "api": {
+                "image": "nginx",
+                "restart": "always",
+                "ports": [invalid_port],
+            }
+        }
+    }
+    with pytest.raises(ValueError, match="Port values must be between 1 and 65535"):
+        DockFleetConfig(**config)
+

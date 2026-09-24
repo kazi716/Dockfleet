@@ -1,10 +1,16 @@
+import asyncio
 import json
 from unittest.mock import MagicMock, patch
 
+import httpx
+from httpx import ASGITransport
 from sqlmodel import Session, SQLModel, create_engine
 
+from dockfleet.dashboard.api import app
+from dockfleet.dashboard.routes import system_status
 from dockfleet.dashboard.services import get_services
-from dockfleet.health.models import ContainerStatus, HealthStatus, Service as DBService
+from dockfleet.health.models import ContainerStatus, HealthStatus, get_session
+from dockfleet.health.models import Service as DBService
 
 
 def test_get_services_preserves_unhealthy_status(monkeypatch):
@@ -47,7 +53,10 @@ def test_get_services_preserves_unhealthy_status(monkeypatch):
         session.add_all([svc_unhealthy, svc_crashed, svc_restarting, svc_healthy])
         session.commit()
 
-    monkeypatch.setattr("dockfleet.dashboard.services.engine", test_engine)
+    monkeypatch.setattr(
+        "dockfleet.dashboard.services.get_session",
+        lambda: get_session(engine=test_engine),
+    )
 
     # Mock docker ps returning containers in Up state
     docker_ps_output = "\n".join(
@@ -135,23 +144,38 @@ def test_get_services_handles_none_and_non_string_names(monkeypatch):
         session.add(svc)
         session.commit()
 
-    monkeypatch.setattr("dockfleet.dashboard.services.engine", test_engine)
+    monkeypatch.setattr(
+        "dockfleet.dashboard.services.get_session",
+        lambda: get_session(engine=test_engine),
+    )
 
     # Various edge case container names in ps output: None, missing, list, non-dockfleet
-    docker_ps_output = "\n".join([
-        json.dumps({"Names": None, "Status": "Up 5 minutes"}),
-        json.dumps({"OtherKey": "value"}),
-        json.dumps({"Names": ["dockfleet_web"], "Status": "Up 5 minutes", "RunningFor": "5 minutes"}),
-        json.dumps({"Names": ["other_container"], "Status": "Up 5 minutes"}),
-        json.dumps({"Names": [], "Status": "Up 5 minutes"}),
-        json.dumps({"Names": 12345, "Status": "Up 5 minutes"}),
-    ])
+    docker_ps_output = "\n".join(
+        [
+            json.dumps({"Names": None, "Status": "Up 5 minutes"}),
+            json.dumps({"OtherKey": "value"}),
+            json.dumps(
+                {
+                    "Names": ["dockfleet_web"],
+                    "Status": "Up 5 minutes",
+                    "RunningFor": "5 minutes",
+                }
+            ),
+            json.dumps({"Names": ["other_container"], "Status": "Up 5 minutes"}),
+            json.dumps({"Names": [], "Status": "Up 5 minutes"}),
+            json.dumps({"Names": 12345, "Status": "Up 5 minutes"}),
+        ]
+    )
 
-    docker_stats_output = "\n".join([
-        json.dumps({"Name": None, "CPUPerc": "1.5%", "MemUsage": "50MB"}),
-        json.dumps({"Name": ["dockfleet_web"], "CPUPerc": "2.0%", "MemUsage": "60MB"}),
-        json.dumps({"OtherKey": "val"}),
-    ])
+    docker_stats_output = "\n".join(
+        [
+            json.dumps({"Name": None, "CPUPerc": "1.5%", "MemUsage": "50MB"}),
+            json.dumps(
+                {"Name": ["dockfleet_web"], "CPUPerc": "2.0%", "MemUsage": "60MB"}
+            ),
+            json.dumps({"OtherKey": "val"}),
+        ]
+    )
 
     def mock_subprocess_run(cmd, *args, **kwargs):
         mock_res = MagicMock()
@@ -169,3 +193,98 @@ def test_get_services_handles_none_and_non_string_names(monkeypatch):
     assert services[0]["status"] == ContainerStatus.RUNNING.value
     assert services[0]["cpu"] == "2.0%"
     assert services[0]["memory"] == "60MB"
+
+
+def test_system_status_counts_restarting_services(monkeypatch):
+    from sqlalchemy.pool import StaticPool
+
+    test_engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(test_engine)
+
+    with Session(test_engine) as session:
+        svc_restarting = DBService(
+            name="web_restarting",
+            status=ContainerStatus.RUNNING,
+            health_status=HealthStatus.RESTARTING,
+            image="nginx:alpine",
+            restart_policy="always",
+            restart_count=1,
+        )
+        svc_healthy = DBService(
+            name="web_healthy",
+            status=ContainerStatus.RUNNING,
+            health_status=HealthStatus.HEALTHY,
+            image="nginx:alpine",
+            restart_policy="always",
+            restart_count=0,
+        )
+        svc_unhealthy = DBService(
+            name="web_unhealthy",
+            status=ContainerStatus.RUNNING,
+            health_status=HealthStatus.UNHEALTHY,
+            image="nginx:alpine",
+            restart_policy="always",
+            restart_count=0,
+        )
+        svc_stopped = DBService(
+            name="web_stopped",
+            status=ContainerStatus.STOPPED,
+            health_status=HealthStatus.HEALTHY,
+            image="nginx:alpine",
+            restart_policy="always",
+            restart_count=0,
+        )
+        session.add_all([svc_restarting, svc_healthy, svc_unhealthy, svc_stopped])
+        session.commit()
+
+    monkeypatch.setattr(
+        "dockfleet.dashboard.services.get_session",
+        lambda: get_session(engine=test_engine),
+    )
+
+    docker_ps_output = "\n".join(
+        [
+            json.dumps({"Names": "dockfleet_web_restarting", "Status": "Up 10 seconds", "RunningFor": "10 seconds"}),
+            json.dumps({"Names": "dockfleet_web_healthy", "Status": "Up 10 minutes", "RunningFor": "10 minutes"}),
+            json.dumps({"Names": "dockfleet_web_unhealthy", "Status": "Up 5 minutes", "RunningFor": "5 minutes"}),
+            json.dumps({"Names": "dockfleet_web_stopped", "Status": "Exited (0) 5 minutes ago", "RunningFor": "5 minutes"}),
+        ]
+    )
+
+    def mock_subprocess_run(cmd, *args, **kwargs):
+        mock_res = MagicMock()
+        if "ps" in cmd:
+            mock_res.stdout = docker_ps_output
+        elif "stats" in cmd:
+            mock_res.stdout = ""
+        return mock_res
+
+    with patch("subprocess.run", side_effect=mock_subprocess_run):
+        # 1. Direct function call
+        res = system_status()
+        assert res["total_services"] == 4
+        assert res["restarting"] == 1
+        assert res["running"] == 3
+        assert res["unhealthy"] == 1
+        assert res["stopped"] == 1
+
+        # 2. HTTP GET /status endpoint call
+        async def _test_http():
+            async with httpx.AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://testserver"
+            ) as client:
+                return await client.get("/status")
+
+        response = asyncio.run(_test_http())
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_services"] == 4
+        assert data["restarting"] == 1
+        assert data["running"] == 3
+        assert data["unhealthy"] == 1
+        assert data["stopped"] == 1
+
