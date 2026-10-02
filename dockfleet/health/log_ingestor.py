@@ -21,13 +21,14 @@ def ingest_docker_logs_once(tail: int = 200) -> None:
 
         for svc in services:
             name = svc.name
+            svc_id = svc.id
             container = f"dockfleet_{name}"
 
             # latest log timestamp we already have for this service
             latest_ts: datetime | None = session.exec(
                 select(LogEvent.created_at)
                 .where(LogEvent.service_name == name)
-                .order_by(LogEvent.created_at.desc())
+                .order_by(LogEvent.created_at.desc()) # type: ignore
                 .limit(1)
             ).one_or_none()
 
@@ -38,16 +39,22 @@ def ingest_docker_logs_once(tail: int = 200) -> None:
                 cmd.extend(["--tail", str(tail)])
             cmd.append(container)
 
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                # container may not exist or be stopped; skip
+            try:
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                )
+            except (subprocess.SubprocessError, OSError) as e:
+                print(f"Error streaming docker logs for {name}: {e}")
                 continue
 
-            for line in result.stdout.splitlines():
+            if process.stdout is None:
+                continue
+
+            batch_count = 0
+            for line in process.stdout:
                 line = line.rstrip()
                 if not line:
                     continue
@@ -60,7 +67,7 @@ def ingest_docker_logs_once(tail: int = 200) -> None:
                         now = latest_ts + timedelta(microseconds=1)
 
                 event = LogEvent(
-                    service_id=svc.id,
+                    service_id=svc_id,
                     service_name=name,
                     created_at=now,
                     level=None,
@@ -69,5 +76,14 @@ def ingest_docker_logs_once(tail: int = 200) -> None:
                 )
                 session.add(event)
                 latest_ts = now
+                
+                batch_count += 1
+                if batch_count >= 1000:
+                    session.commit()
+                    batch_count = 0
 
-        session.commit()
+            process.stdout.close()
+            process.wait()
+
+            if batch_count > 0:
+                session.commit()

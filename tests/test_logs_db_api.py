@@ -72,19 +72,23 @@ def test_ingest_docker_logs_once_initial_and_incremental(monkeypatch):
 
     recorded_cmds = []
 
-    def mock_subprocess_run(cmd, *args, **kwargs):
+    def mock_subprocess_popen(cmd, *args, **kwargs):
         recorded_cmds.append(cmd)
-        mock_res = MagicMock()
-        mock_res.returncode = 0
+        mock_process = MagicMock()
+        mock_process.wait = MagicMock()
+        mock_stdout = MagicMock()
+        
         if "--tail" in cmd:
-            mock_res.stdout = "line 1\nline 2\n"
+            mock_stdout.__iter__.return_value = ["line 1\n", "line 2\n"]
         elif "--since" in cmd:
-            mock_res.stdout = "line 3\n"
+            mock_stdout.__iter__.return_value = ["line 3\n"]
         else:
-            mock_res.stdout = ""
-        return mock_res
+            mock_stdout.__iter__.return_value = []
+            
+        mock_process.stdout = mock_stdout
+        return mock_process
 
-    with patch("subprocess.run", side_effect=mock_subprocess_run):
+    with patch("subprocess.Popen", side_effect=mock_subprocess_popen):
         # 1. Initial ingest (no prior logs) -> should use --tail
         ingest_docker_logs_once(tail=200)
 
