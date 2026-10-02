@@ -191,6 +191,15 @@ class LogEvent(SQLModel, table=True):
     )  # e.g. "docker-logs", "scheduler", "orchestrator"
 
 
+class LogCursor(SQLModel, table=True):
+    """
+    Tracks the last ingested Docker source timestamp per service.
+    This prevents skipped logs during ingestion failures.
+    """
+    service_id: int = Field(primary_key=True)
+    last_timestamp: str = Field(nullable=False)
+
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DB_PATH = PROJECT_ROOT / "dockfleet.db"
 

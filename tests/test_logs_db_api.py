@@ -59,6 +59,7 @@ def test_store_log_skips_unknown_service():
 
 def test_ingest_docker_logs_once_initial_and_incremental(monkeypatch):
     from unittest.mock import MagicMock, patch
+
     from dockfleet.health.log_ingestor import ingest_docker_logs_once
 
     with get_session() as session:
@@ -79,9 +80,9 @@ def test_ingest_docker_logs_once_initial_and_incremental(monkeypatch):
         mock_stdout = MagicMock()
         
         if "--tail" in cmd:
-            mock_stdout.__iter__.return_value = ["line 1\n", "line 2\n"]
+            mock_stdout.__iter__.return_value = ["2026-10-02T22:21:32.123456789Z line 1\n", "2026-10-02T22:21:33.123456789Z line 2\n"]
         elif "--since" in cmd:
-            mock_stdout.__iter__.return_value = ["line 3\n"]
+            mock_stdout.__iter__.return_value = ["2026-10-02T22:21:34.123456789Z line 3\n"]
         else:
             mock_stdout.__iter__.return_value = []
             
@@ -101,7 +102,7 @@ def test_ingest_docker_logs_once_initial_and_incremental(monkeypatch):
             assert messages == ["line 1", "line 2"]
 
         assert len(recorded_cmds) == 1
-        assert recorded_cmds[0][:4] == ["docker", "logs", "--tail", "200"]
+        assert recorded_cmds[0][:5] == ["docker", "logs", "--timestamps", "--tail", "200"]
         assert recorded_cmds[0][-1] == "dockfleet_api"
 
         # 2. Subsequent ingest -> should use --since with latest_ts isoformat
@@ -118,14 +119,16 @@ def test_ingest_docker_logs_once_initial_and_incremental(monkeypatch):
             assert messages == ["line 1", "line 2", "line 3"]
 
         assert len(recorded_cmds) == 2
-        assert recorded_cmds[1][:2] == ["docker", "logs"]
-        assert recorded_cmds[1][2] == "--since"
+        assert recorded_cmds[1][:3] == ["docker", "logs", "--timestamps"]
+        assert recorded_cmds[1][3] == "--since"
         assert recorded_cmds[1][-1] == "dockfleet_api"
 
 def test_ingest_docker_logs_batching():
     from unittest.mock import MagicMock, patch
-    from dockfleet.health.log_ingestor import ingest_docker_logs_once
+
     from sqlmodel import Session
+
+    from dockfleet.health.log_ingestor import ingest_docker_logs_once
 
     with get_session() as session:
         session.exec(select(LogEvent)).all()
@@ -145,7 +148,7 @@ def test_ingest_docker_logs_batching():
         mock_process = MagicMock()
         mock_process.wait.return_value = 0
         mock_stdout = MagicMock()
-        mock_stdout.__iter__.return_value = [f"line {i}\n" for i in range(2001)]
+        mock_stdout.__iter__.return_value = [f"2026-10-02T22:21:32.123456789Z line {i}\n" for i in range(2001)]
         mock_process.stdout = mock_stdout
         return mock_process
 
@@ -162,4 +165,38 @@ def test_ingest_docker_logs_batching():
         with get_session() as session:
             rows = session.exec(select(LogEvent)).all()
             assert len(rows) == 2001
+
+
+def test_ingest_docker_logs_nonzero_exit_discards_streamed_output():
+    from unittest.mock import MagicMock, patch
+
+    from sqlmodel import select
+
+    from dockfleet.health.log_ingestor import ingest_docker_logs_once
+
+    with get_session() as session:
+        session.exec(select(LogEvent)).all()
+        session.exec(select(Service)).all()
+        session.query(LogEvent).delete()
+        session.query(Service).delete()
+        session.add(
+            Service(
+                name="api",
+                image="dummy-image",
+                restart_policy="always",
+            )
+        )
+        session.commit()
+
+    mock_process = MagicMock()
+    mock_process.wait.return_value = 1
+    mock_process.stdout = MagicMock()
+    mock_process.stdout.__iter__.return_value = ["2026-10-02T22:21:32.123456789Z partial line\n"]
+
+    with patch("subprocess.Popen", return_value=mock_process):
+        ingest_docker_logs_once(tail=200)
+
+    with get_session() as session:
+        rows = session.exec(select(LogEvent)).all()
+        assert rows == []
 
