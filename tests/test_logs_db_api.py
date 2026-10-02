@@ -75,7 +75,7 @@ def test_ingest_docker_logs_once_initial_and_incremental(monkeypatch):
     def mock_subprocess_popen(cmd, *args, **kwargs):
         recorded_cmds.append(cmd)
         mock_process = MagicMock()
-        mock_process.wait = MagicMock()
+        mock_process.wait.return_value = 0
         mock_stdout = MagicMock()
         
         if "--tail" in cmd:
@@ -121,3 +121,45 @@ def test_ingest_docker_logs_once_initial_and_incremental(monkeypatch):
         assert recorded_cmds[1][:2] == ["docker", "logs"]
         assert recorded_cmds[1][2] == "--since"
         assert recorded_cmds[1][-1] == "dockfleet_api"
+
+def test_ingest_docker_logs_batching():
+    from unittest.mock import MagicMock, patch
+    from dockfleet.health.log_ingestor import ingest_docker_logs_once
+    from sqlmodel import Session
+
+    with get_session() as session:
+        session.exec(select(LogEvent)).all()
+        session.exec(select(Service)).all()
+        session.query(LogEvent).delete()
+        session.query(Service).delete()
+        
+        svc = Service(
+            name="api",
+            image="dummy-image",
+            restart_policy="always",
+        )
+        session.add(svc)
+        session.commit()
+
+    def mock_subprocess_popen(cmd, *args, **kwargs):
+        mock_process = MagicMock()
+        mock_process.wait.return_value = 0
+        mock_stdout = MagicMock()
+        mock_stdout.__iter__.return_value = [f"line {i}\n" for i in range(2001)]
+        mock_process.stdout = mock_stdout
+        return mock_process
+
+    original_commit = Session.commit
+
+    with patch("subprocess.Popen", side_effect=mock_subprocess_popen):
+        with patch.object(Session, "commit", autospec=True, side_effect=original_commit) as mock_commit:
+            ingest_docker_logs_once(tail=2001)
+
+            # 2001 logs -> two 1,000-event batch commits + one 1-event remainder commit
+            # (there may also be an outer commit from the session context manager, so >= 3)
+            assert mock_commit.call_count >= 3
+
+        with get_session() as session:
+            rows = session.exec(select(LogEvent)).all()
+            assert len(rows) == 2001
+

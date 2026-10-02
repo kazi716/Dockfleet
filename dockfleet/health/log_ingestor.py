@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import tempfile
 from datetime import datetime, timedelta, timezone
 
 from sqlmodel import select
@@ -50,40 +51,45 @@ def ingest_docker_logs_once(tail: int = 200) -> None:
                 print(f"Error streaming docker logs for {name}: {e}")
                 continue
 
-            if process.stdout is None:
-                continue
-
-            batch_count = 0
-            for line in process.stdout:
-                line = line.rstrip()
-                if not line:
+            with tempfile.TemporaryFile(mode="w+t") as spool:
+                # Stage to disk (tempfile) to avoid memory blowup while we wait for success
+                for line in process.stdout:
+                    line = line.rstrip()
+                    if line:
+                        spool.write(line + "\n")
+                
+                process.stdout.close()
+                if process.wait() != 0:
+                    session.rollback()
                     continue
 
-                now = datetime.now(timezone.utc)
-                if latest_ts is not None:
-                    if latest_ts.tzinfo is None:
-                        latest_ts = latest_ts.replace(tzinfo=timezone.utc)
-                    if now <= latest_ts:
-                        now = latest_ts + timedelta(microseconds=1)
+                spool.seek(0)
+                batch_count = 0
+                for line in spool:
+                    line = line.rstrip()
+                    
+                    now = datetime.now(timezone.utc)
+                    if latest_ts is not None:
+                        if latest_ts.tzinfo is None:
+                            latest_ts = latest_ts.replace(tzinfo=timezone.utc)
+                        if now <= latest_ts:
+                            now = latest_ts + timedelta(microseconds=1)
 
-                event = LogEvent(
-                    service_id=svc_id,
-                    service_name=name,
-                    created_at=now,
-                    level=None,
-                    message=line,
-                    source="docker-logs-ingestor",
-                )
-                session.add(event)
-                latest_ts = now
-                
-                batch_count += 1
-                if batch_count >= 1000:
+                    event = LogEvent(
+                        service_id=svc_id,
+                        service_name=name,
+                        created_at=now,
+                        level=None,
+                        message=line,
+                        source="docker-logs-ingestor",
+                    )
+                    session.add(event)
+                    latest_ts = now
+                    
+                    batch_count += 1
+                    if batch_count >= 1000:
+                        session.commit()
+                        batch_count = 0
+
+                if batch_count > 0:
                     session.commit()
-                    batch_count = 0
-
-            process.stdout.close()
-            process.wait()
-
-            if batch_count > 0:
-                session.commit()
